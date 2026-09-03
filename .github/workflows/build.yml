@@ -1,0 +1,171 @@
+name: Build OniGame v0.5.1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    name: Build plugin and resource pack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Show repository files
+        shell: bash
+        run: |
+          echo "Repository contents:"
+          find . -maxdepth 7 -type f | sort
+
+      - name: Find Maven project
+        id: project
+        shell: bash
+        run: |
+          POM_PATH="$(find . \
+            -name pom.xml \
+            -type f \
+            -not -path '*/target/*' \
+            | head -n 1)"
+
+          if [ -z "$POM_PATH" ]; then
+            echo "::error::pom.xmlが見つかりません。"
+            echo "::error::ソースZIPを展開し、pom.xmlとsrcフォルダをGitHubへアップロードしてください。"
+            exit 1
+          fi
+
+          PROJECT_DIR="$(realpath "$(dirname "$POM_PATH")")"
+          POM_PATH="$(realpath "$POM_PATH")"
+
+          echo "directory=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "pom=$POM_PATH" >> "$GITHUB_OUTPUT"
+
+          echo "使用するpom.xml: $POM_PATH"
+          echo "プロジェクトフォルダ: $PROJECT_DIR"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Show Java and Maven versions
+        shell: bash
+        run: |
+          java -version
+          mvn -version
+
+      - name: Build OniGame plugin
+        working-directory: ${{ steps.project.outputs.directory }}
+        shell: bash
+        run: |
+          mvn --batch-mode --update-snapshots clean package
+
+      - name: Find generated plugin JAR
+        id: plugin
+        shell: bash
+        run: |
+          PROJECT_DIR="${{ steps.project.outputs.directory }}"
+
+          JAR_PATH="$(find "$PROJECT_DIR/target" \
+            -maxdepth 1 \
+            -name 'OniGame-*.jar' \
+            -type f \
+            | head -n 1)"
+
+          if [ -z "$JAR_PATH" ]; then
+            echo "::error::OniGameのJARが生成されませんでした。"
+            echo "targetフォルダの内容:"
+            find "$PROJECT_DIR/target" -maxdepth 2 -type f || true
+            exit 1
+          fi
+
+          JAR_PATH="$(realpath "$JAR_PATH")"
+          echo "path=$JAR_PATH" >> "$GITHUB_OUTPUT"
+
+          echo "生成されたプラグインJAR:"
+          ls -lh "$JAR_PATH"
+
+      - name: Check resource pack files
+        id: resource_pack
+        shell: bash
+        run: |
+          PROJECT_DIR="${{ steps.project.outputs.directory }}"
+          RESOURCE_DIR="$PROJECT_DIR/resourcepack"
+          OUTPUT_FILE="$GITHUB_WORKSPACE/OniGame-ResourcePack-v3.zip"
+
+          REQUIRED_FILES=(
+            "$RESOURCE_DIR/pack.mcmeta"
+            "$RESOURCE_DIR/assets/minecraft/textures/models/armor/chainmail_layer_1.png"
+            "$RESOURCE_DIR/assets/minecraft/textures/models/armor/chainmail_layer_2.png"
+            "$RESOURCE_DIR/assets/minecraft/models/item/chainmail_helmet.json"
+            "$RESOURCE_DIR/assets/minecraft/models/item/chainmail_chestplate.json"
+            "$RESOURCE_DIR/assets/minecraft/models/item/chainmail_leggings.json"
+            "$RESOURCE_DIR/assets/minecraft/models/item/chainmail_boots.json"
+            "$RESOURCE_DIR/assets/onigame/textures/item/dakoface.png"
+            "$RESOURCE_DIR/assets/onigame/textures/item/dakomune.png"
+            "$RESOURCE_DIR/assets/onigame/textures/item/dakozubon.png"
+            "$RESOURCE_DIR/assets/onigame/textures/item/dakokutu.png"
+            "$RESOURCE_DIR/assets/onigame/models/item/dakoface.json"
+            "$RESOURCE_DIR/assets/onigame/models/item/dakomune.json"
+            "$RESOURCE_DIR/assets/onigame/models/item/dakozubon.json"
+            "$RESOURCE_DIR/assets/onigame/models/item/dakokutu.json"
+            "$RESOURCE_DIR/assets/onigame/sounds.json"
+            "$RESOURCE_DIR/assets/onigame/sounds/music/final_phase.ogg"
+          )
+
+          for REQUIRED in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$REQUIRED" ]; then
+              echo "::error::必要なファイルが見つかりません: $REQUIRED"
+              exit 1
+            fi
+          done
+
+          echo "リソースパックの必要ファイルを確認しました。"
+
+          rm -f "$OUTPUT_FILE"
+
+          (
+            cd "$RESOURCE_DIR"
+            zip -r "$OUTPUT_FILE" pack.mcmeta assets
+          )
+
+          if [ ! -f "$OUTPUT_FILE" ]; then
+            echo "::error::リソースパックZIPの生成に失敗しました。"
+            exit 1
+          fi
+
+          echo "path=$OUTPUT_FILE" >> "$GITHUB_OUTPUT"
+
+          echo "生成されたリソースパック:"
+          ls -lh "$OUTPUT_FILE"
+
+      - name: Test resource pack ZIP
+        shell: bash
+        run: |
+          RESOURCE_PACK="${{ steps.resource_pack.outputs.path }}"
+
+          unzip -t "$RESOURCE_PACK"
+
+          echo "リソースパックの内容:"
+          unzip -l "$RESOURCE_PACK"
+
+      - name: Upload OniGame plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: OniGame-Paper-1.20.1-v0.5.1
+          path: ${{ steps.plugin.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload OniGame resource pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: OniGame-ResourcePack-v3
+          path: ${{ steps.resource_pack.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
